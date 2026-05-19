@@ -8,6 +8,7 @@ VPN Sales Bot — Telethon | Sanaei Panel v3
 """
 
 import asyncio
+import random
 import json
 import logging
 import os
@@ -24,25 +25,38 @@ from telethon.tl.types import InputMediaPhoto
 # ─────────────────────────────────────────────
 #  CONFIG — همه تنظیمات اینجاست
 # ─────────────────────────────────────────────
+
+
+
 CONFIG = {
     # ── تلگرام ──────────────────────────────
-    "API_ID": 0,                          # از my.telegram.org
-    "API_HASH": "",                       # از my.telegram.org
-    "BOT_TOKEN": "",                      # از @BotFather
+    "API_ID": 123,
+    "API_HASH": "",
+    "BOT_TOKEN": "",
+
 
     # ── ادمین‌ها (آیدی عددی) ──────────────
-    "ADMIN_IDS": [123456789],
+    "ADMIN_IDS": [],
+    "ADMIN_UNAME": "@",
+    "CH_ID":"@",
+    "CH_NAME":"",
+
 
     # ── پنل 3x-ui (Sanaei v3) ──────────────────
-    "PANEL_URL": "https://panel.example.com",   # بدون / انتهایی
-    "PANEL_API_TOKEN": "",                       # Settings → Security → API Token
-    "PANEL_INBOUND_ID": 1,              # آیدی inbound مورد نظر
-
+    "PANEL_URL": "http://0.0.0.0:2053/",   # بدون / انتهایی
+    "PANEL_API_TOKEN": "",
+    "PANEL_INBOUND_ID": 1,
+    "SUB_LINK":"http://ex.com:80/sub/",
     # ── اطلاعات پرداخت ──────────────────────
-    "CARD_NUMBER": "6037-9975-1234-5678",
-    "CARD_OWNER": "علی محمدی",
-    "CRYPTO_WALLET": "TRc2XYZ...yourWalletAddress",
-    "CRYPTO_TYPE": "USDT (TRC20)",
+    # چند شماره کارت — هر بار یکی رندوم به مشتری نشان داده می‌شود
+    "CARD_NUMBERS": [
+        {"number": "", "owner": "علی پاکدل"},
+        {"number": "", "owner": "علی پاکدل"},
+        {"number": "", "owner": "علی پاکدل"},
+    ],
+    "CRYPTO_WALLET":"",
+    "CRYPTO_TYPE": "Ton",
+
 
     # ── مسیر ذخیره دیتا ─────────────────────
     "DATA_FILE": "orders.json",
@@ -60,9 +74,9 @@ CONFIG = {
 
     # ── پروکسی SOCKS5 برای اتصال تلگرام ─────
     # None = بدون پروکسی | ("host", port) = فعال
-    "SOCKS5_PROXY": None,           # مثال: ("127.0.0.1", 1080)
-    "SOCKS5_USER": None,            # اختیاری
-    "SOCKS5_PASS": None,            # اختیاری
+    "SOCKS5_PROXY": (),           # مثال: ("127.0.0.1", 1080)
+    "SOCKS5_USER": "",            # اختیاری
+    "SOCKS5_PASS": "",            # اختیاری
 
     # ── آمار روزانه ──────────────────────────
     # آیدی چنل یا یوزرنیم (مثال: -1001234567890 یا "@mychannel")
@@ -77,47 +91,47 @@ CONFIG = {
 CONFIGS = [
     {
         "id": "basic_30",
-        "name": "🟢 بیسیک — ۳۰ روزه",
+        "name": "🟢 الفا — ۳۰ روزه",
         "duration_days": 30,
-        "traffic_gb": 30,
-        "price_irr": 120_000,
-        "price_usdt": 2.5,
+        "traffic_gb": 1,
+        "price_irr": 180_000,
+        "price_TON": 0.48,
         "description": "مناسب استفاده معمولی",
     },
     {
         "id": "pro_30",
-        "name": "🔵 پرو — ۳۰ روزه",
+        "name": "🔵 بتا — ۳۰ روزه",
         "duration_days": 30,
-        "traffic_gb": 80,
-        "price_irr": 250_000,
-        "price_usdt": 5.0,
-        "description": "مناسب استریم و دانلود",
+        "traffic_gb": 2,
+        "price_irr": 360_000,
+        "price_TON": 0.95,
+        "description": " مناسب دانلود سبک",
     },
     {
         "id": "ultra_30",
-        "name": "🟣 اولترا — ۳۰ روزه",
+        "name": "🟣 چارلی — ۳۰ روزه",
         "duration_days": 30,
-        "traffic_gb": 200,
-        "price_irr": 500_000,
-        "price_usdt": 10.0,
-        "description": "نامحدود عملی — پرسرعت",
+        "traffic_gb": 3,
+        "price_irr": 540_000,
+        "price_TON": 1.4,
+        "description": "مناسب اینستا و تلگرام و دانلود سبک",
     },
     {
         "id": "basic_90",
-        "name": "🟡 بیسیک — ۳ ماهه",
-        "duration_days": 90,
-        "traffic_gb": 90,
-        "price_irr": 320_000,
-        "price_usdt": 6.5,
-        "description": "صرفه‌جویی ۳ ماهه",
+        "name": "🟡 دلتا — ۱ ماهه",
+        "duration_days": 30,
+        "traffic_gb": 5,
+        "price_irr": 900_000,
+        "price_TON": 2.3,
+        "description": "مناسب استفاده های سنگین تر",
     },
     {
         "id": "pro_90",
-        "name": "🔴 پرو — ۳ ماهه",
-        "duration_days": 90,
-        "traffic_gb": 250,
-        "price_irr": 650_000,
-        "price_usdt": 13.0,
+        "name": "🔴 اکو — ۱ ماهه",
+        "duration_days": 30,
+        "traffic_gb": 10,
+        "price_irr": 1650_000,
+        "price_TON": 4.6,
         "description": "بهترین ارزش — پرمصرف",
     },
 ]
@@ -199,10 +213,10 @@ class DataStore:
         """آمار سفارش‌های تایید شده یک روز مشخص (فرمت: YYYY-MM-DD)."""
         stats = {
             "total_irr": 0,
-            "total_usdt": 0.0,
+            "total_TON": 0.0,
             "total_gb": 0,
             "card_irr": 0,
-            "crypto_usdt": 0.0,
+            "crypto_TON": 0.0,
             "count": 0,
         }
         for o in self._data["orders"].values():
@@ -219,8 +233,8 @@ class DataStore:
                 stats["card_irr"] += cfg["price_irr"]
                 stats["total_irr"] += cfg["price_irr"]
             else:
-                stats["crypto_usdt"] += cfg["price_usdt"]
-                stats["total_usdt"] += cfg["price_usdt"]
+                stats["crypto_TON"] += cfg["price_TON"]
+                stats["total_TON"] += cfg["price_TON"]
         return stats
 
     # ── تنظیمات runtime ──────────────────────
@@ -280,7 +294,7 @@ class SanaeiPanel:
         email: str,
         duration_days: int,
         traffic_gb: int,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Optional[str]]:
         """
         کلاینت جدید روی inbound مشخص می‌سازد.
         بر اساس مستندات رسمی 3x-ui:
@@ -305,7 +319,7 @@ class SanaeiPanel:
             "enable": True,
             "expiryTime": expire_ms,
             "totalGB": traffic_bytes,
-            "limitIp": 0,
+            "limitIp": 2,
             "flow": "",
             "tgId": "",
             "subId": sub_id,
@@ -320,7 +334,7 @@ class SanaeiPanel:
         resp = await self._post("/panel/api/inbounds/addClient", payload)
         if not resp or not resp.get("success"):
             log.error(f"addClient failed: {resp}")
-            return None
+            return None, None
 
         log.info(f"Client '{email}' created on inbound {inbound_id}")
 
@@ -328,15 +342,20 @@ class SanaeiPanel:
         links_resp = await self._get(
             f"/panel/api/inbounds/getClientLinks/{inbound_id}/{email}"
         )
+        config_link: str = client_id  # fallback
         if links_resp and links_resp.get("success"):
             links: list = links_resp.get("obj", [])
             if links:
-                # اگر چند لینک (external proxy) برگشت، همه را با خط جدید برگردان
-                return "\n".join(links)
+                config_link = "\n".join(links)
+        else:
+            log.warning("getClientLinks returned empty, falling back to UUID")
 
-        # fallback: برگرداندن UUID در صورت خطا در دریافت لینک
-        log.warning("getClientLinks returned empty, falling back to UUID")
-        return client_id
+        # سابلینک — مسیر استاندارد 3x-ui
+        sub_link = f"{CONFIG["SUB_LINK"]}{sub_id}"
+
+
+
+        return config_link, sub_link
 
     async def test_connection(self) -> bool:
         """اتصال به پنل را تست می‌کند."""
@@ -396,7 +415,7 @@ def payment_keyboard(db: "DataStore") -> list:
     if is_card_enabled(db):
         buttons.append([Button.inline("💳 کارت به کارت", data="pay:card")])
     if is_crypto_enabled(db):
-        buttons.append([Button.inline("₿ ارز دیجیتال (USDT)", data="pay:crypto")])
+        buttons.append([Button.inline("₿ ارز دیجیتال (TON)", data="pay:crypto")])
     buttons.append([Button.inline("❌ انصراف", data="cancel")])
     return buttons
 
@@ -431,6 +450,20 @@ def admin_panel_keyboard(db: "DataStore") -> list:
 #  ربات اصلی
 # ─────────────────────────────────────────────
 async def main():
+    # ── بارگذاری config.json از پنل وب (اگه وجود داشت) ──
+    if os.path.exists("config.json"):
+        with open("config.json", "r", encoding="utf-8") as _f:
+            _ext = json.load(_f)
+        # کلیدهای اصلی را override می‌کند
+        for _k, _v in _ext.items():
+            if _k in CONFIG and _k != "settings":
+                CONFIG[_k] = _v
+        # پلن‌ها را هم override می‌کند
+        if _ext.get("CONFIGS"):
+            CONFIGS.clear()
+            CONFIGS.extend(_ext["CONFIGS"])
+        log.info("config.json بارگذاری شد")
+
     db = DataStore(CONFIG["DATA_FILE"])
     panel = SanaeiPanel(
         CONFIG["PANEL_URL"],
@@ -480,7 +513,7 @@ async def main():
         db.set_state(user.id, {"state": STATE_CHOOSE_CONFIG})
         text = (
             f"👋 سلام {user.first_name} عزیز!\n\n"
-            "به فروشگاه VPN خوش آمدی 🛡️\n"
+            f"به فروشگاه {CONFIG['CH_NAME']} خوش آمدی 🛡️\n"
             "یکی از پلن‌های زیر را انتخاب کن:\n\n"
         )
         for cfg in CONFIGS:
@@ -488,7 +521,7 @@ async def main():
                 f"**{cfg['name']}**\n"
                 f"  • ترافیک: {cfg['traffic_gb']} GB\n"
                 f"  • مدت: {cfg['duration_days']} روز\n"
-                f"  • قیمت: {format_irr(cfg['price_irr'])} | {cfg['price_usdt']} USDT\n"
+                f"  • قیمت: {format_irr(cfg['price_irr'])} | {cfg['price_TON']} TON\n"
                 f"  • {cfg['description']}\n\n"
             )
         await event.respond(text, buttons=config_keyboard(), parse_mode="markdown")
@@ -560,7 +593,7 @@ async def main():
             db.set_state(user_id, {"state": STATE_CHOOSE_PAYMENT, "config_id": config_id})
             text = (
                 f"✅ پلن انتخابی: **{cfg['name']}**\n\n"
-                f"💰 قیمت: {format_irr(cfg['price_irr'])} | {cfg['price_usdt']} USDT\n\n"
+                f"💰 قیمت: {format_irr(cfg['price_irr'])} | {cfg['price_TON']} TON\n\n"
                 "روش پرداخت را انتخاب کن:"
             )
             await event.edit(text, buttons=payment_keyboard(db), parse_mode="markdown")
@@ -593,18 +626,19 @@ async def main():
             })
 
             if method == "card":
+                _card = random.choice(CONFIG["CARD_NUMBERS"])
                 text = (
                     f"💳 **پرداخت کارت به کارت**\n\n"
                     f"مبلغ: **{format_irr(cfg['price_irr'])}**\n"
-                    f"شماره کارت: `{CONFIG['CARD_NUMBER']}`\n"
-                    f"به نام: {CONFIG['CARD_OWNER']}\n\n"
+                    f"شماره کارت: `{_card['number']}`\n"
+                    f"به نام: {_card['owner']}\n\n"
                     f"🔢 کد سفارش: `{order_id}`\n\n"
                     "پس از واریز، **عکس یا متن رسید** را اینجا ارسال کن."
                 )
             else:
                 text = (
                     f"₿ **پرداخت با {CONFIG['CRYPTO_TYPE']}**\n\n"
-                    f"مبلغ: **{cfg['price_usdt']} USDT**\n"
+                    f"مبلغ: **{cfg['price_TON']} TON**\n"
                     f"آدرس ولت: `{CONFIG['CRYPTO_WALLET']}`\n\n"
                     f"🔢 کد سفارش: `{order_id}`\n\n"
                     "پس از واریز، **هش تراکنش (TXID)** را اینجا ارسال کن."
@@ -637,29 +671,35 @@ async def main():
             await event.edit(f"⏳ در حال ایجاد کانفیگ برای سفارش `{order_id}`...", parse_mode="markdown")
 
             email = f"user_{order['user_id']}_{order_id}".lower()
-            link = await panel.add_client(
+            _result = await panel.add_client(
                 inbound_id=CONFIG["PANEL_INBOUND_ID"],
                 email=email,
                 duration_days=cfg["duration_days"],
                 traffic_gb=cfg["traffic_gb"],
             )
+            config_link, sub_link = _result if _result is not None else (None, None)
 
-            if not link:
+            if not config_link:
                 db.update_order(order_id, status="panel_error")
                 await event.edit(f"❌ خطا در ایجاد کانفیگ روی پنل! سفارش `{order_id}` را دستی بررسی کن.")
                 return
 
-            db.update_order(order_id, status="approved", link=link)
+            db.update_order(order_id, status="approved", link=config_link, sub_link=sub_link)
 
             # ارسال به کاربر
+            sub_line = f"\n🔄 **سابلینک (برای بروزرسانی خودکار):**\n`{sub_link}`\n" if sub_link else ""
             user_text = (
                 f"✅ **سفارش شما تایید شد!**\n\n"
                 f"پلن: {cfg['name']}\n"
                 f"ترافیک: {cfg['traffic_gb']} GB\n"
                 f"مدت اعتبار: {cfg['duration_days']} روز\n\n"
-                f"🔗 **لینک کانفیگ شما:**\n`{link}`\n\n"
+                f"🔗 **لینک کانفیگ:**\n`{config_link}`\n"
+                f"{sub_line}\n"
                 "این لینک را در نرم‌افزار VPN خود وارد کنید.\n"
-                "برای خرید مجدد /start را بزنید."
+                "برای خرید مجدد /start را بزنید.\n"
+                f" آدرس کانال: {CONFIG['CH_ID']} \n"
+                f"پشتیبانی: {CONFIG['ADMIN_UNAME']}"
+
             )
             try:
                 await client.send_message(order["user_id"], user_text, parse_mode="markdown")
@@ -667,7 +707,7 @@ async def main():
                 await event.edit(f"✅ کانفیگ با موفقیت ایجاد و برای کاربر `{order['user_id']}` ارسال شد.", parse_mode="markdown")
             except Exception as e:
                 log.error(f"Failed to send config to user: {e}")
-                await event.edit(f"⚠️ کانفیگ ایجاد شد اما ارسال به کاربر ناموفق بود.\n\nلینک:\n`{link}`", parse_mode="markdown")
+                await event.edit(f"⚠️ کانفیگ ایجاد شد اما ارسال به کاربر ناموفق بود.\n\nلینک:\n`{config_link}`", parse_mode="markdown")
 
             # اطلاع‌رسانی خرید به چنل آمار
             if CONFIG.get("STATS_CHANNEL"):
@@ -675,7 +715,7 @@ async def main():
                 price_str = (
                     f"{cfg['price_irr']:,} تومان"
                     if order["payment_method"] == "card"
-                    else f"{cfg['price_usdt']} USDT"
+                    else f"{cfg['price_TON']} TON"
                 )
                 sale_msg = (
                     f"🛒 **فروش جدید**\n\n"
@@ -832,9 +872,9 @@ async def main():
                     f"📦 ترافیک فروخته‌شده: **{stats['total_gb']} GB**\n\n"
                     f"💰 درآمد کل:\n"
                     f"  • کارت به کارت: **{stats['card_irr']:,} تومان**\n"
-                    f"  • ارز دیجیتال: **{stats['crypto_usdt']:.2f} USDT**\n\n"
+                    f"  • ارز دیجیتال: **{stats['crypto_TON']:.2f} TON**\n\n"
                     f"💵 جمع تومانی: **{stats['total_irr']:,} تومان**\n"
-                    f"💲 جمع USDT: **{stats['total_usdt']:.2f} USDT**"
+                    f"💲 جمع TON: **{stats['total_TON']:.2f} TON**"
                 )
 
             try:
