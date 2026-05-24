@@ -1,0 +1,34 @@
+{
+  "API_ID": 0,
+  "API_HASH": "",
+  "BOT_TOKEN": "",
+  "ADMIN_IDS": [],
+  "ADMIN_UNAME": "@",
+  "CH_ID": "@",
+  "CH_NAME": "",
+  "PANEL_URL": "http://0.0.0.0:2053",
+  "PANEL_API_TOKEN": "",
+  "SUB_LINK": "http://0.0.0.0:80/sub/",
+  "CARD_NUMBERS": [{"number": "", "owner": ""}],
+  "CRYPTO_WALLET": "",
+  "CRYPTO_TYPE": "TON",
+  "MIN_GB": 1,
+  "MAX_GB": 50,
+  "DEFAULT_DURATION_DAYS": 30,
+  "PAYMENT_CARD_ENABLED": true,
+  "PAYMENT_CRYPTO_ENABLED": true,
+  "SHOP_OPEN": true,
+  "STATS_CHANNEL": null,
+  "STATS_HOUR": 23,
+  "STATS_MINUTE": 59,
+  "INBOUNDS": [
+    {
+      "id": "alpha",
+      "name": "🟢 سرویس آلفا",
+      "inbound_id": 1,
+      "price_per_gb_irr": 180000,
+      "price_per_gb_TON": 0.48,
+      "description": "مناسب استفاده معمولی"
+    }
+  ]
+}
