@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiohttp
@@ -143,8 +143,13 @@ class DataStore:
                 self._data = json.load(f)
 
     def _save(self):
-        with open(self.path, "w", encoding="utf-8") as f:
+        # Write to a temp file then atomically replace, so a crash mid-write
+        # never leaves orders.json truncated/corrupt (which would crash the
+        # bot on next startup via json.load).
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.path)
 
     # ── وضعیت کاربر ─────────────────────────
     def get_state(self, user_id: int) -> dict:
@@ -179,7 +184,7 @@ class DataStore:
             "duration_days": CONFIG["DEFAULT_DURATION_DAYS"],
             "payment_method": payment_method,
             "status": "pending",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         self._save()
         return order_id
@@ -273,26 +278,9 @@ class SanaeiPanel:
         duration_days: int,
         traffic_gb: int,
     ) -> tuple[Optional[str], Optional[str]]:
-        expire_ms = int(
-            (datetime.utcnow() + timedelta(days=duration_days)).timestamp() * 1000
+        payload, client_id, sub_id = build_client_payload(
+            inbound_id, email, duration_days, traffic_gb
         )
-        traffic_bytes = traffic_gb * 1024 ** 3
-        client_id = str(uuid.uuid4())
-        sub_id = str(uuid.uuid4()).replace("-", "")[:16]
-
-        client_obj = {
-            "id": client_id,
-            "email": email,
-            "enable": True,
-            "expiryTime": expire_ms,
-            "totalGB": traffic_bytes,
-            "limitIp": 2,
-            "flow": "",
-            "tgId": "",
-            "subId": sub_id,
-        }
-        settings_str = json.dumps({"clients": [client_obj]})
-        payload = {"id": inbound_id, "settings": settings_str}
 
         resp = await self._post("/panel/api/inbounds/addClient", payload)
         if not resp or not resp.get("success"):
@@ -333,6 +321,40 @@ def find_inbound(inbound_id: str) -> Optional[dict]:
     return next((i for i in INBOUNDS if i["id"] == inbound_id), None)
 
 
+def build_client_payload(
+    inbound_id: int,
+    email: str,
+    duration_days: int,
+    traffic_gb: int,
+) -> tuple[dict, str, str]:
+    """ساخت payload نهایی برای addClient پنل 3x-ui.
+
+    Returns:
+        (payload, client_id, sub_id) — client_id/sub_id برای لینک کانفیگ و سابلینک
+        مورد نیاز هستند، اینجا تولید می‌شوند تا خالص و قابل تست باشند.
+    """
+    expire_ms = int(
+        (datetime.now(timezone.utc) + timedelta(days=duration_days)).timestamp() * 1000
+    )
+    traffic_bytes = traffic_gb * 1024 ** 3
+    client_id = str(uuid.uuid4())
+    sub_id = str(uuid.uuid4()).replace("-", "")[:16]
+
+    client_obj = {
+        "id": client_id,
+        "email": email,
+        "enable": True,
+        "expiryTime": expire_ms,
+        "totalGB": traffic_bytes,
+        "limitIp": 2,
+        "flow": "",
+        "tgId": "",
+        "subId": sub_id,
+    }
+    payload = {"id": inbound_id, "settings": json.dumps({"clients": [client_obj]})}
+    return payload, client_id, sub_id
+
+
 def calc_price(inbound: dict, gb: int) -> tuple[int, float]:
     """قیمت کل را بر اساس نرخ per-GB محاسبه می‌کند."""
     irr = inbound["price_per_gb_irr"] * gb
@@ -365,7 +387,8 @@ def confirm_keyboard() -> list:
 
 def payment_keyboard(db: "DataStore") -> list:
     buttons = []
-    if is_card_enabled(db):
+    # فقط وقتی شماره کارتی واقعاً تنظیم شده نمایش بده تا کاربر به بن‌بست نخوره
+    if is_card_enabled(db) and CONFIG["CARD_NUMBERS"]:
         buttons.append([Button.inline("💳 کارت به کارت", data="pay:card")])
     if is_crypto_enabled(db):
         buttons.append([Button.inline("₿ ارز دیجیتال (TON)", data="pay:crypto")])
@@ -610,6 +633,14 @@ async def main():
                 return
 
             price_irr, price_TON = calc_price(inb, gb)
+
+            # جلوگیری از کرش (IndexError) وقتی هیچ شماره کارتی تنظیم نشده
+            if method == "card" and not CONFIG["CARD_NUMBERS"]:
+                await event.answer(
+                    "کارت به کارت در حال حاضر در دسترس نیست. روش دیگری را انتخاب کن.",
+                    alert=True,
+                )
+                return
 
             order_id = db.create_order(
                 user_id=user_id,
@@ -953,13 +984,13 @@ async def main():
         target_m = CONFIG["STATS_MINUTE"]
 
         while True:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             next_run = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
             if now >= next_run:
                 next_run += timedelta(days=1)
             await asyncio.sleep((next_run - now).total_seconds())
 
-            today = datetime.utcnow().strftime("%Y-%m-%d")
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             stats = db.daily_stats(today)
 
             if stats["count"] == 0:

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+orders.json
+orders.json.tmp
+vpn_bot_session.session
