@@ -178,5 +178,158 @@ class AdminToggleTests(unittest.TestCase):
         self.assertIn("pay:card", datas)
 
 
+class DigitNormalizationTests(unittest.TestCase):
+    def test_persian_digits(self):
+        self.assertEqual(v.normalize_digits("۱۰"), "10")
+        self.assertEqual(v.normalize_digits("۱۲۳۴۵۶۷۸۹۰"), "1234567890")
+
+    def test_arabic_digits(self):
+        self.assertEqual(v.normalize_digits("١٠"), "10")
+
+    def test_mixed_and_ascii_unchanged(self):
+        self.assertEqual(v.normalize_digits("abc123"), "abc123")
+        self.assertEqual(v.normalize_digits("۵ GB"), "5 GB")
+
+    def test_empty(self):
+        self.assertEqual(v.normalize_digits(""), "")
+        self.assertEqual(v.normalize_digits(None), None)
+
+
+class ParseGbInputTests(unittest.TestCase):
+    def test_basic(self):
+        self.assertEqual(v.parse_gb_input("10", 1, 50), 10)
+
+    def test_persian_digits(self):
+        self.assertEqual(v.parse_gb_input("۱۰", 1, 50), 10)
+
+    def test_with_suffix(self):
+        self.assertEqual(v.parse_gb_input("20 GB", 1, 50), 20)
+        self.assertEqual(v.parse_gb_input("۵ گیگ", 1, 50), 5)
+
+    def test_out_of_range(self):
+        self.assertIsNone(v.parse_gb_input("0", 1, 50))
+        self.assertIsNone(v.parse_gb_input("51", 1, 50))
+        self.assertIsNone(v.parse_gb_input("100 GB", 1, 50))
+
+    def test_non_numeric(self):
+        self.assertIsNone(v.parse_gb_input("abc", 1, 50))
+        self.assertIsNone(v.parse_gb_input("", 1, 50))
+        self.assertIsNone(v.parse_gb_input("12.5", 1, 50))  # فقط عدد صحیح
+
+    def test_boundary_values(self):
+        self.assertEqual(v.parse_gb_input("1", 1, 50), 1)
+        self.assertEqual(v.parse_gb_input("50", 1, 50), 50)
+
+
+class DailyStatsCryptoTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp()
+        self.db = v.DataStore(os.path.join(self.tmp, "orders.json"))
+        self.today = v.datetime.now(v.timezone.utc).strftime("%Y-%m-%d")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_crypto_revenue_gathered(self):
+        self.db.create_order(1, "alpha", 10, 1_800_000, 4.8, "crypto")
+        oid = self.db.pending_orders()[0]["order_id"]
+        self.db.update_order(oid, status="approved")
+        stats = self.db.daily_stats(self.today)
+        self.assertEqual(stats["count"], 1)
+        self.assertEqual(stats["total_TON"], 4.8)
+        self.assertEqual(stats["crypto_TON"], 4.8)
+        self.assertEqual(stats["total_irr"], 0)
+        self.assertEqual(stats["card_irr"], 0)
+
+
+class UserOrdersTests(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp()
+        self.db = v.DataStore(os.path.join(self.tmp, "orders.json"))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_user_orders_filters_by_user(self):
+        a = self.db.create_order(111, "alpha", 5, 900_000, 2.4, "card")
+        self.db.create_order(222, "beta", 5, 1_250_000, 3.25, "crypto")
+        self.db.update_order(a, status="approved", link="vless://abc")
+        orders = self.db.user_orders(111)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["status"], "approved")
+        self.assertEqual(orders[0]["link"], "vless://abc")
+
+    def test_user_orders_empty(self):
+        self.assertEqual(self.db.user_orders(999), [])
+
+    def test_user_orders_newest_first(self):
+        o1 = self.db.create_order(111, "alpha", 5, 900_000, 2.4, "card")
+        o2 = self.db.create_order(111, "alpha", 8, 1_440_000, 3.84, "card")
+        orders = self.db.user_orders(111)
+        self.assertEqual(orders[0]["order_id"], o2)
+        self.assertEqual(orders[1]["order_id"], o1)
+
+
+class FormatDailyStatsTests(unittest.TestCase):
+    def test_zero_orders_message(self):
+        stats = {k: 0 for k in ("total_irr", "total_TON", "total_gb", "card_irr", "crypto_TON", "count")}
+        msg = v.format_daily_stats(stats, "2026-08-17")
+        self.assertIn("هیچ فروشی", msg)
+        self.assertIn("2026-08-17", msg)
+
+    def test_nonzero_stats_formatting(self):
+        stats = {
+            "total_irr": 1_800_000,
+            "total_TON": 4.8,
+            "total_gb": 10,
+            "card_irr": 1_800_000,
+            "crypto_TON": 4.8,
+            "count": 2,
+        }
+        msg = v.format_daily_stats(stats, "2026-08-17")
+        self.assertIn("2 عدد", msg)
+        self.assertIn("1,800,000", msg)
+        self.assertIn("4.8000", msg)
+
+
+class ValidateConfigTests(unittest.TestCase):
+    def _clean(self):
+        # ذخیره مقادیر اصلی برای بازگرداندن در finally
+        keys = ("API_ID", "API_HASH", "BOT_TOKEN", "PANEL_API_TOKEN", "PANEL_URL", "ADMIN_IDS")
+        saved = {k: v.CONFIG.get(k) for k in keys}
+        return saved
+
+    def _restore(self, saved):
+        for k, val in saved.items():
+            v.CONFIG[k] = val
+
+    def test_reports_missing_fields(self):
+        saved = self._clean()
+        try:
+            v.CONFIG.update({
+                "API_ID": 0, "API_HASH": "", "BOT_TOKEN": "",
+                "PANEL_API_TOKEN": "", "PANEL_URL": "", "ADMIN_IDS": [],
+            })
+            problems = v.validate_config()
+            self.assertEqual(len(problems), 6)
+        finally:
+            self._restore(saved)
+
+    def test_ok_when_configured(self):
+        saved = self._clean()
+        try:
+            v.CONFIG.update({
+                "API_ID": 1, "API_HASH": "x", "BOT_TOKEN": "y",
+                "PANEL_API_TOKEN": "z", "PANEL_URL": "http://x", "ADMIN_IDS": [1],
+            })
+            self.assertEqual(v.validate_config(), [])
+        finally:
+            self._restore(saved)
+
+
 if __name__ == "__main__":
     unittest.main()

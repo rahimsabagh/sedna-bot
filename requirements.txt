@@ -1,0 +1,3 @@
+telethon>=1.34
+aiohttp>=3.9
+PySocks>=1.7

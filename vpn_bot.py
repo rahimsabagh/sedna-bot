@@ -200,6 +200,13 @@ class DataStore:
     def pending_orders(self) -> list:
         return [o for o in self._data["orders"].values() if o["status"] == "pending"]
 
+    def user_orders(self, user_id: int) -> list:
+        """همه سفارش‌های یک کاربر (از جدید به قدیم)."""
+        return [
+            o for o in self._data["orders"].values()
+            if o.get("user_id") == user_id
+        ][::-1]
+
     def daily_stats(self, date_str: str) -> dict:
         stats = {
             "total_irr": 0,
@@ -251,25 +258,34 @@ class SanaeiPanel:
     def _session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(headers=self._headers)
 
-    async def _get(self, path: str) -> Optional[dict]:
+    async def _request(self, method: str, path: str, payload: Optional[dict] = None) -> Optional[dict]:
+        """اجرای درخواست با تلاش مجدد برای خطاهای موقتی شبکه."""
         url = f"{self.base}{path}"
-        try:
-            async with self._session() as s:
-                async with s.get(url, ssl=False, timeout=self._timeout) as r:
-                    return await r.json()
-        except Exception as e:
-            log.error(f"GET {path} error: {e}")
-            return None
+        for attempt in range(3):
+            try:
+                async with self._session() as s:
+                    if method == "GET":
+                        async with s.get(url, ssl=False, timeout=self._timeout) as r:
+                            return await r.json()
+                    else:
+                        async with s.post(url, json=payload, ssl=False, timeout=self._timeout) as r:
+                            return await r.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                log.warning(f"{method} {path} attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)  # backoff: 1s, 2s
+                else:
+                    log.error(f"{method} {path} error after retries: {e}")
+            except Exception as e:
+                log.error(f"{method} {path} error: {e}")
+                return None
+        return None
+
+    async def _get(self, path: str) -> Optional[dict]:
+        return await self._request("GET", path)
 
     async def _post(self, path: str, payload: dict) -> Optional[dict]:
-        url = f"{self.base}{path}"
-        try:
-            async with self._session() as s:
-                async with s.post(url, json=payload, ssl=False, timeout=self._timeout) as r:
-                    return await r.json()
-        except Exception as e:
-            log.error(f"POST {path} error: {e}")
-            return None
+        return await self._request("POST", path, payload)
 
     async def add_client(
         self,
@@ -366,6 +382,39 @@ def format_irr(amount: int) -> str:
     return f"{amount:,} تومان"
 
 
+# ── تبدیل ارقام فارسی/عربی به انگلیسی ─────────
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+_ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+
+def normalize_digits(text: str) -> str:
+    """ارقام فارسی و عربی را به انگلیسی تبدیل می‌کند.
+
+    کاربرها معمولاً با کیبورد فارسی عدد وارد می‌کنند (مثل «۱۰» یا «١٠»).
+    """
+    if not text:
+        return text
+    return text.translate(_PERSIAN_DIGITS).translate(_ARABIC_DIGITS)
+
+
+def parse_gb_input(text: str, min_gb: int, max_gb: int) -> Optional[int]:
+    """مقدار گیگ واردشده را پارس می‌کند؛ در صورت نامعتبر بودن None برمی‌گرداند.
+
+    از ارقام فارسی/عربی پشتیبانی می‌کند و پسوندهای رایج (GB، گیگ) را حذف می‌کند.
+    """
+    t = normalize_digits(text or "").strip().lower()
+    for suffix in ("gb", "gig", "گیگ", "گيگ"):
+        if t.endswith(suffix):
+            t = t[: -len(suffix)].strip()
+            break
+    if not t.isdigit():
+        return None
+    gb = int(t)
+    if gb < min_gb or gb > max_gb:
+        return None
+    return gb
+
+
 def inbound_keyboard() -> list:
     """کیبورد انتخاب سرویس."""
     buttons = []
@@ -446,6 +495,44 @@ def admin_panel_keyboard(db: "DataStore") -> list:
     ]
 
 
+def format_daily_stats(stats: dict, date_str: str) -> str:
+    """متن آمار روزانه — هم برای ارسال زمان‌بندی‌شده و هم دستور /stats ادمین."""
+    if stats["count"] == 0:
+        return f"📊 **آمار فروش — {date_str}**\n\nامروز هیچ فروشی ثبت نشد."
+    return (
+        f"📊 **آمار فروش — {date_str}**\n\n"
+        f"🛒 تعداد فروش: **{stats['count']} عدد**\n"
+        f"📦 ترافیک فروخته‌شده: **{stats['total_gb']} GB**\n\n"
+        f"💰 درآمد کل:\n"
+        f"  • کارت به کارت: **{stats['card_irr']:,} تومان**\n"
+        f"  • ارز دیجیتال: **{stats['crypto_TON']:.4f} TON**\n\n"
+        f"💵 جمع تومانی: **{stats['total_irr']:,} تومان**\n"
+        f"💲 جمع TON: **{stats['total_TON']:.4f} TON**"
+    )
+
+
+def validate_config() -> list:
+    """اعتبارسنجی تنظیمات حیاتی در هنگام راه‌اندازی.
+
+    Returns:
+        لیستی از پیام‌های خطا؛ اگر خالی باشد همه‌چیز مرتب است.
+    """
+    problems = []
+    if not CONFIG.get("API_ID"):
+        problems.append("API_ID تنظیم نشده است.")
+    if not CONFIG.get("API_HASH"):
+        problems.append("API_HASH تنظیم نشده است.")
+    if not CONFIG.get("BOT_TOKEN"):
+        problems.append("BOT_TOKEN تنظیم نشده است.")
+    if not CONFIG.get("PANEL_API_TOKEN"):
+        problems.append("PANEL_API_TOKEN تنظیم نشده است.")
+    if not CONFIG.get("PANEL_URL"):
+        problems.append("PANEL_URL تنظیم نشده است.")
+    if not CONFIG.get("ADMIN_IDS"):
+        problems.append("حداقل یک ADMIN_ID باید تنظیم شود.")
+    return problems
+
+
 # ─────────────────────────────────────────────
 #  ربات اصلی
 # ─────────────────────────────────────────────
@@ -462,8 +549,24 @@ async def main():
             INBOUNDS.extend(_ext["INBOUNDS"])
         log.info("config.json بارگذاری شد")
 
+    # اعتبارسنجی تنظیمات حیاتی — اگر چیزی ناقص بود،‌همین اول مشخص باشد
+    problems = validate_config()
+    if problems:
+        for p in problems:
+            log.warning(f"⚠️ {p}")
+        log.warning("تنظیمات ناقص است؛ ربات ممکن است درست کار نکند.")
+
     db = DataStore(CONFIG["DATA_FILE"])
     panel = SanaeiPanel(CONFIG["PANEL_URL"], CONFIG["PANEL_API_TOKEN"])
+
+    # بررسی اتصال به پنل (غیرمهلک) — فقط هشدار، اجرا را متوقف نمی‌کند
+    async def warn_if_panel_down():
+        try:
+            if not await panel.test_connection():
+                log.warning("⚠️ اتصال به پنل برقرار نیست — بررسی PANEL_URL / PANEL_API_TOKEN")
+        except Exception as e:
+            log.warning(f"⚠️ تست پنل ناموفق بود: {e}")
+    asyncio.ensure_future(warn_if_panel_down())
 
     # ساخت TelegramClient
     proxy_cfg = CONFIG["SOCKS5_PROXY"]
@@ -498,6 +601,9 @@ async def main():
             await event.respond(CONFIG["SHOP_CLOSED_MSG"])
             return
 
+        # شروع تازه: مکالمه‌های نیمه‌کاره قبلی را پاک کن تا کاربر در وضعیت
+        # نامعتبر گیر نکند (مخصوصاً وقتی خرید قبلی در حال انتظار رسید بوده).
+        db.clear_state(user.id)
         db.set_state(user.id, {"state": STATE_CHOOSE_INBOUND})
 
         text = (
@@ -514,6 +620,127 @@ async def main():
         text += f"📅 مدت اعتبار همه سرویس‌ها: {CONFIG['DEFAULT_DURATION_DAYS']} روز"
 
         await event.respond(text, buttons=inbound_keyboard(), parse_mode="markdown")
+
+    # ══════════════════════════════════════════
+    #  /help
+    # ══════════════════════════════════════════
+    @client.on(events.NewMessage(pattern=r"^/help$"))
+    async def cmd_help(event):
+        user = await event.get_sender()
+        if not is_shop_open(db):
+            await event.respond(CONFIG["SHOP_CLOSED_MSG"])
+            return
+        await event.respond(
+            f"👋 راهنمای فروشگاه {CONFIG['CH_NAME']}\n\n"
+            f"🛒 برای خرید یک سرویس:\n"
+            f"  دستور `/start` را بزن و مراحل را دنبال کن.\n\n"
+            f"📄 برای مشاهده سفارش‌های قبلی و دریافت مجدد لینک:\n"
+            f"  دستور `/myorders` را بزن.\n\n"
+            f"گام‌های خرید:\n"
+            f"  1️⃣ انتخاب سرویس\n"
+            f"  2️⃣ وارد کردن حجم ترافیک (۱ تا {CONFIG['MAX_GB']} GB)\n"
+            f"  3️⃣ انتخاب روش پرداخت (کارت به کارت یا ارز دیجیتال)\n"
+            f"  4️⃣ ارسال رسید پرداخت\n"
+            f"  5️⃣ پس از تأیید ادمین، کانفیگ برایت ارسال می‌شود ✅\n\n"
+            f"👤 پشتیبانی: {CONFIG['ADMIN_UNAME']}\n"
+            f"📢 کانال: {CONFIG['CH_ID']}",
+            parse_mode="markdown",
+        )
+
+    # ══════════════════════════════════════════
+    #  /myorders — سفارش‌های خود کاربر
+    # ══════════════════════════════════════════
+    @client.on(events.NewMessage(pattern=r"^/myorders$"))
+    async def cmd_myorders(event):
+        user_id = event.sender_id
+        orders = db.user_orders(user_id)
+        if not orders:
+            await event.respond(
+                "شما هنوز سفارشی ثبت نکرده‌اید.\nبرای شروع خرید /start را بزن.",
+                parse_mode="markdown",
+            )
+            return
+
+        lines = []
+        for o in orders:
+            status_icon = {
+                "pending": "⏳ در انتظار تأیید",
+                "approved": "✅ تایید شده",
+                "rejected": "❌ رد شده",
+                "panel_error": "⚠️ خطای پنل",
+            }.get(o["status"], o["status"])
+            inb = find_inbound(o.get("inbound_id", ""))
+            inb_name = inb["name"] if inb else o.get("inbound_id", "—")
+            lines.append(
+                f"`{o['order_id']}` — {inb_name} | {o.get('gb', 0)} GB | {status_icon}"
+            )
+        text = (
+            f"📄 **سفارش‌های شما**\n\n"
+            + "\n".join(lines)
+            + "\n\n"
+            "برای خرید جدید /start را بزن."
+        )
+        await event.respond(text, parse_mode="markdown")
+
+        # ارسال لینک آخرین کانفیگ تأییدشده (مدرن‌ترین سفارش تأییدشده) به صورت جداگانه
+        for o in orders:
+            if o["status"] == "approved" and o.get("link"):
+                sub_line = f"\n🔄 **سابلینک:**\n`{o.get('sub_link', '')}`" if o.get("sub_link") else ""
+                await event.respond(
+                    f"🔗 **لینک کانفیگ شما (سفارش `{o['order_id']}`):**\n"
+                    f"`{o['link']}`\n{sub_line}",
+                    parse_mode="markdown",
+                )
+                return
+
+    # ══════════════════════════════════════════
+    #  /stats — آمار امروز (فقط ادمین)
+    # ══════════════════════════════════════════
+    @client.on(events.NewMessage(pattern=r"^/stats$"))
+    async def cmd_stats(event):
+        user = await event.get_sender()
+        if user.id not in CONFIG["ADMIN_IDS"]:
+            return
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        stats = db.daily_stats(today)
+        await event.respond(
+            format_daily_stats(stats, today),
+            parse_mode="markdown",
+        )
+
+    # ══════════════════════════════════════════
+    #  /resend <order_id> — ارسال مجدد کانفیگ (فقط ادمین)
+    # ══════════════════════════════════════════
+    @client.on(events.NewMessage(pattern=r"^/resend(?:\s+(.+))?$"))
+    async def cmd_resend(event):
+        user = await event.get_sender()
+        if user.id not in CONFIG["ADMIN_IDS"]:
+            return
+        arg = (event.pattern_match.group(1) or "").strip()
+        if not arg:
+            await event.respond("استفاده: `/resend <order_id>`", parse_mode="markdown")
+            return
+        order = db.get_order(arg.upper())
+        if not order:
+            await event.respond(f"سفارش `{arg}` یافت نشد.", parse_mode="markdown")
+            return
+        if order["status"] != "approved" or not order.get("link"):
+            await event.respond(
+                f"سفارش `{arg}` هنوز تایید نشده یا لینکی ندارد.", parse_mode="markdown"
+            )
+            return
+        sub_line = f"\n🔄 **سابلینک:**\n`{order.get('sub_link', '')}`" if order.get("sub_link") else ""
+        try:
+            await client.send_message(
+                order["user_id"],
+                f"🔗 **لینک کانفیگ شما (سفارش `{order['order_id']}`):**\n"
+                f"`{order['link']}`\n{sub_line}",
+                parse_mode="markdown",
+            )
+            await event.respond(f"✅ لینک سفارش `{order['order_id']}` برای کاربر ارسال شد.")
+        except Exception as e:
+            log.error(f"Failed to resend config: {e}")
+            await event.respond(f"❌ ارسال مجدد ناموفق بود: {e}")
 
     # ══════════════════════════════════════════
     #  /admin
@@ -541,7 +768,14 @@ async def main():
         if not pending:
             await event.respond("هیچ سفارش در انتظاری وجود ندارد.")
             return
-        for o in pending:
+        # جلوگیری از اسپم پیام وقتی تعداد سفارش‌های در انتظار زیاد است
+        if len(pending) > 10:
+            await event.respond(
+                f"⚠️ {len(pending)} سفارش در انتظار است؛ "
+                "برای جلوگیری از اسپم، لینک رسید را با /orders در دسته‌های بعدی ببینید.\n"
+                "برای مشاهده همه در یک لیست از تلاش بعدی استفاده کنید."
+            )
+        for o in pending[:10]:
             inb = find_inbound(o["inbound_id"])
             text = (
                 f"🔔 سفارش `{o['order_id']}`\n"
@@ -874,16 +1108,11 @@ async def main():
             min_gb = CONFIG["MIN_GB"]
             max_gb = CONFIG["MAX_GB"]
 
-            if not text.isdigit():
+            gb = parse_gb_input(text, min_gb, max_gb)
+            if gb is None:
                 await event.respond(
-                    f"⚠️ لطفاً یک عدد صحیح بین {min_gb} تا {max_gb} وارد کن."
-                )
-                return
-
-            gb = int(text)
-            if gb < min_gb or gb > max_gb:
-                await event.respond(
-                    f"⚠️ مقدار باید بین {min_gb} و {max_gb} گیگابایت باشد."
+                    f"⚠️ لطفاً یک عدد صحیح بین {min_gb} تا {max_gb} گیگابایت وارد کن "
+                    "(مثل `10` یا `۱۰`)."
                 )
                 return
 
@@ -992,20 +1221,7 @@ async def main():
 
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             stats = db.daily_stats(today)
-
-            if stats["count"] == 0:
-                msg = f"📊 **آمار فروش — {today}**\n\nامروز هیچ فروشی ثبت نشد."
-            else:
-                msg = (
-                    f"📊 **آمار فروش — {today}**\n\n"
-                    f"🛒 تعداد فروش: **{stats['count']} عدد**\n"
-                    f"📦 ترافیک فروخته‌شده: **{stats['total_gb']} GB**\n\n"
-                    f"💰 درآمد کل:\n"
-                    f"  • کارت به کارت: **{stats['card_irr']:,} تومان**\n"
-                    f"  • ارز دیجیتال: **{stats['crypto_TON']:.4f} TON**\n\n"
-                    f"💵 جمع تومانی: **{stats['total_irr']:,} تومان**\n"
-                    f"💲 جمع TON: **{stats['total_TON']:.4f} TON**"
-                )
+            msg = format_daily_stats(stats, today)
             try:
                 await client.send_message(channel, msg, parse_mode="markdown")
                 log.info(f"آمار روزانه {today} ارسال شد.")

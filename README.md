@@ -34,7 +34,7 @@
 ```bash
 git clone https://github.com/your-username/vpn-bot.git
 cd vpn-bot
-pip install telethon aiohttp
+pip install -r requirements.txt
 ```
 
 ---
@@ -114,6 +114,10 @@ sudo systemctl enable --now vpn-bot
 | دستور | توضیح |
 |-------|-------|
 | `/start` | شروع فرایند خرید |
+| `/help` | راهنمای استفاده از ربات |
+| `/myorders` | مشاهده سفارش‌های قبلی و دریافت مجدد لینک کانفیگ |
+| `/stats` | آمار فروش امروز (فقط ادمین) |
+| `/resend <order_id>` | ارسال مجدد لینک کانفیگ به کاربر (فقط ادمین) |
 | `/admin` | پنل مدیریت (فقط ادمین) |
 | `/orders` | لیست سفارش‌های در انتظار (فقط ادمین) |
 
@@ -143,8 +147,11 @@ sudo systemctl enable --now vpn-bot
 
 ```
 vpn-bot/
-├── vpn_bot.py      # کد اصلی
-├── orders.json     # سفارش‌ها (ساخته می‌شود خودکار)
+├── vpn_bot.py        # کد اصلی
+├── config.json       # تنظیمات خارجی (اختیاری)
+├── test_vpn_bot.py   # تست‌های واحد
+├── requirements.txt  # وابستگی‌ها
+├── orders.json       # سفارش‌ها (ساخته می‌شود خودکار)
 └── README.md
 ```
 
@@ -164,7 +171,18 @@ vpn-bot/
 ```
 telethon
 aiohttp
+PySocks      # فقط اگر SOCKS5_PROXY استفاده می‌کنید
 ```
+
+---
+
+## 🧪 تست‌ها
+
+```bash
+python -m unittest test_vpn_bot -v
+```
+
+تست‌ها شامل منطق قیمت‌گذاری، ساخت payload پنل، دیتاستور، ارقام فارسی/عربی، پارس حجم گیگابایت، قالب آمار و اعتبارسنجی تنظیمات هستند.
 
 ---
 
